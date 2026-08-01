@@ -120,7 +120,6 @@ def run_sorting_simulation(num_items: int = 20) -> dict:
     print(f"\nGenerated {len(items)} items for sorting")
 
     start = time.perf_counter()
-    logger.info("Starting batch simulation with %d items", num_items)
     cell.run_batch(items, dt=0.01)
     sim_time = time.perf_counter() - start
 
@@ -170,7 +169,7 @@ def run_robot_demo() -> None:
         if result["success"]:
             print(f"  Result: Success (cycle {result['cycle_time']:.2f} sec)")
         else:
-            print(f"  Result: Failed — {result.get('reason', 'Unknown')}")
+            print(f"  Result: Failed - {result.get('reason', 'Unknown')}")
 
     print(f"\n{'='*60}")
     print("ROBOT STATISTICS:")
@@ -319,8 +318,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--items", type=int, default=10,
                         help="Number of items to process")
-    parser.add_argument("--workers", type=int, default=0,
-                        help="Number of parallel workers (0=disabled)")
     parser.add_argument("--input", type=str,
                         help="Path to a 3D model file to classify")
     parser.add_argument("--output", type=str,
@@ -339,121 +336,9 @@ def _save_results(results: list[dict], output: str) -> None:
     logger.info("Results saved to %s", out_path)
 
 
-def validate_args(args: argparse.Namespace) -> str | None:
-    """Validate input parameters; returns an error message or None if valid."""
-    if args.items is not None and args.items <= 0:
-        return "Number of items must be positive"
-
-    if args.input:
-        input_path = Path(args.input)
-        if not input_path.exists():
-            return f"Input file not found: {args.input}"
-        if input_path.suffix.lower() not in (".stl", ".step", ".stp"):
-            return f"Unsupported file format: {input_path.suffix}"
-
-    if args.config:
-        config_path = Path(args.config)
-        if not config_path.exists():
-            return f"Configuration file not found: {args.config}"
-
-    if args.output:
-        output_path = Path(args.output)
-        parent = output_path.parent
-        if str(parent) and not parent.exists():
-            return f"Output directory does not exist: {parent}"
-
-    return None
-
-
-def run_full_system_parallel(num_items: int = 10, workers: int = 4) -> list[dict]:
-    """Run the full pipeline with parallel processing for larger batches."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    print("=" * 60)
-    print(f"FULL SYSTEM (PARALLEL) ({num_items} items, {workers} workers)")
-    print("=" * 60)
-
-    classifier = ItemClassifier()
-    generator = ItemGenerator()
-    robot = RobotManipulator()
-
-    zones = get_config().simulation.zones
-    zone_positions = {
-        "B": zones["B"].position,
-        "C": zones["C"].position,
-        "D": zones["D"].position,
-    }
-    pickup_position = zones["A"].position + np.array([200, 0, 800])
-
-    items = [
-        generator.get_test_item(i)
-        if i < len(generator.TEST_ITEMS)
-        else generator.generate_random(seed=i)
-        for i in range(num_items)
-    ]
-    logger.info("Parallel processing: %d items with %d workers", num_items, workers)
-
-    def process_single_item(i: int, item) -> dict:
-        logger.debug("Processing item %d: %s", i + 1, item.name)
-        dims = item.dimensions
-        classification = classifier.classify_from_dimensions(
-            dimensions=dims,
-            roundness=item.roundness,
-            has_circle=item.is_round and item.roundness >= 0.8,
-        )
-        target_zone = {
-            Category.SUITABLE: "B",
-            Category.OVERSIZED: "C",
-            Category.NEEDS_REPACKAGING: "D",
-        }[classification.category]
-        timing = robot.pick_and_place(
-            item_position=pickup_position,
-            item_dimensions=dims,
-            target_position=zone_positions[target_zone],
-        )
-        return {
-            "item": item.name,
-            "category": classification.category.value,
-            "zone": target_zone,
-            "cycle_time": timing.get("cycle_time", 0.0),
-            "success": timing["success"],
-            "reason": timing.get("reason", ""),
-        }
-
-    results: list[dict] = []
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_to_item = {
-            executor.submit(process_single_item, i, item): item
-            for i, item in enumerate(items)
-        }
-        for future in as_completed(future_to_item):
-            results.append(future.result())
-
-    total_cycle_time = sum(r["cycle_time"] for r in results if r["success"])
-    failed_count = sum(1 for r in results if not r["success"])
-
-    print(f"\n{'='*60}")
-    print("PARALLEL SUMMARY:")
-    print(f"  Total processed: {len(results)} items")
-    print(f"  Successful: {len(results) - failed_count}")
-    print(f"  Failed: {failed_count}")
-    if total_cycle_time > 0:
-        print(f"  Total cycle time: {total_cycle_time:.2f} sec")
-        print(f"  Throughput: {len(results) / total_cycle_time:.2f} items/sec")
-    print("=" * 60)
-    return results
-
-
 def main(argv: list[str] | None = None) -> int:
     """Entry point; returns a process exit code."""
     args = build_parser().parse_args(argv)
-
-    # Input validation
-    error = validate_args(args)
-    if error:
-        print(f"Error: {error}")
-        return 1
-
     # Load custom configuration if provided
     import config as cfg_mod
     if args.config:
@@ -464,16 +349,19 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("Failed to load config %s: %s", args.config, exc)
             return 1
     setup_logging()
-    logger.info("Starting system in '%s' mode", args.mode)
+
 
     if args.mode == "classify":
         if args.input:
             classifier = ItemClassifier()
-            logger.info("Classifying file: %s", args.input)
             try:
                 result = classifier.classify_from_file(args.input)
             except (FileNotFoundError, ValueError) as exc:
                 logger.error("%s", exc)
+                return 1
+            except Exception as exc:
+                logger.exception("Unexpected error while classifying %s", args.input)
+                print(f"Error: {exc}")
                 return 1
             print(f"Category: {result.category.value}")
             print(f"Reason: {result.reason}")
@@ -481,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
             run_classifier_demo()
 
     elif args.mode == "simulate":
-        report = run_sorting_simulation(args.items)
+        run_sorting_simulation(args.items)
 
     elif args.mode == "robot":
         run_robot_demo()
@@ -492,15 +380,10 @@ def main(argv: list[str] | None = None) -> int:
             _save_results(report["results"], args.output)
 
     elif args.mode == "full":
-        workers = getattr(args, "workers", 0) or 0
-        if workers and args.items and args.items > 20:
-            results = run_full_system_parallel(args.items, workers=workers)
-        else:
-            results = run_full_system(args.items)
+        results = run_full_system(args.items)
         if args.output:
             _save_results(results, args.output)
 
-    logger.info("System completed successfully")
     return 0
 
 

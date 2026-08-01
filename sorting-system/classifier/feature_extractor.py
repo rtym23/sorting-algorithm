@@ -56,8 +56,17 @@ class FeatureExtractor:
     # ------------------------------------------------------------------ #
     # Mesh loading
     # ------------------------------------------------------------------ #
+    # STEP (ISO 10303) geometry is always expressed in metres: the trimesh
+    # backend (cascadio) normalises the file's native units to SI before
+    # tessellating. The whole system works in millimetres, so STEP models are
+    # rescaled here and STL models (typically authored in mm) are left as-is.
+    STEP_MM_PER_UNIT = 1000.0
+
     def load_mesh(self, file_path: str) -> trimesh.Trimesh:
         """Load and validate a 3D model, returning a single ``Trimesh``.
+
+        STEP/STP models are rescaled from metres to millimetres so that all
+        features are reported in the system's native units.
 
         Raises:
             FileNotFoundError: if the file does not exist.
@@ -67,7 +76,13 @@ class FeatureExtractor:
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        loaded = trimesh.load(str(path), force="mesh")
+        try:
+            loaded = trimesh.load(str(path), force="mesh")
+        except ModuleNotFoundError as exc:
+            raise ValueError(
+                f"Cannot load '{file_path}': missing backend module "
+                f"{exc.name!r}. Install it with 'pip install cascadio'."
+            ) from exc
         mesh = self._to_single_mesh(loaded)
 
         if mesh is None or len(mesh.vertices) == 0:
@@ -75,6 +90,9 @@ class FeatureExtractor:
                 f"No geometry found in '{file_path}' — the file may be "
                 f"corrupted or unsupported."
             )
+
+        if path.suffix.lower() in (".step", ".stp"):
+            mesh.apply_scale(self.STEP_MM_PER_UNIT)
         return mesh
 
     @staticmethod
@@ -304,7 +322,7 @@ class FeatureExtractor:
     # Smallest enclosing circle (Welzl's algorithm)
     # ------------------------------------------------------------------ #
     def _minimum_enclosing_circle(self, points: np.ndarray) -> float:
-        """Radius of the minimum enclosing circle (randomized Welzl, O(n) expected)."""
+        """Radius of the minimum enclosing circle (Welzl, O(n) expected)."""
         if len(points) == 0:
             return 0.0
         if len(points) == 1:
@@ -314,23 +332,44 @@ class FeatureExtractor:
         if len(unique) < 2:
             return 0.0
 
-        center, radius = self._welzl(list(map(tuple, unique)), [])
+        center, radius = self._welzl(list(map(tuple, unique)))
         return float(radius)
 
-    def _welzl(self, points, boundary) -> tuple:
-        """Randomized incremental Welzl algorithm returning (center, radius)."""
-        if len(boundary) == 3 or not points:
-            return self._circle_from_points(boundary)
+    def _welzl(self, points: list[tuple]) -> tuple:
+        """Iterative incremental Welzl algorithm returning (center, radius).
 
-        idx = random.randint(0, len(points) - 1)
-        p = points[idx]
-        rest = points[:idx] + points[idx + 1:]
+        The recursive formulation recurses once per point, which blows the
+        stack on section outlines with thousands of vertices. This iterative
+        variant is equivalent but has constant recursion depth.
+        """
+        pts = list(points)
+        random.shuffle(pts)
 
-        center, radius = self._welzl(rest, boundary)
-        if self._dist_sq(center, p) <= radius * radius + 1e-9:
-            return center, radius
+        center = np.asarray(pts[0], dtype=float)
+        radius = 0.0
 
-        return self._welzl(rest, boundary + [p])
+        def outside(point) -> bool:
+            return self._dist_sq(center, point) > radius * radius + 1e-9
+
+        n = len(pts)
+        for i in range(n):
+            p = pts[i]
+            if outside(p):
+                center = np.asarray(p, dtype=float)
+                radius = 0.0
+                for j in range(i):
+                    q = pts[j]
+                    if outside(q):
+                        # Smallest circle through p and q (diameter circle).
+                        pa = np.asarray(p, dtype=float)
+                        qa = np.asarray(q, dtype=float)
+                        center = (pa + qa) / 2.0
+                        radius = float(np.linalg.norm(pa - qa) / 2.0)
+                        for k in range(j):
+                            r = pts[k]
+                            if outside(r):
+                                center, radius = self._circle_from_points([p, q, r])
+        return center, radius
 
     @staticmethod
     def _circle_from_points(boundary) -> tuple:
@@ -438,42 +477,35 @@ class FeatureExtractor:
 
     @staticmethod
     def _distance_to_nearest_edge(point: np.ndarray, polygon: np.ndarray) -> float:
-        """Smallest distance from ``point`` to any polygon edge (segment)."""
+        """Smallest distance from ``point`` to any polygon edge (segment).
+
+        Vectorised over all edges so it stays fast even for section outlines
+        with thousands of vertices.
+        """
         p = np.asarray(point, dtype=float)
         poly = np.asarray(polygon, dtype=float)
-        best = float("inf")
-        n = len(poly)
-        for i in range(n):
-            a = poly[i]
-            b = poly[(i + 1) % n]
-            best = min(best, FeatureExtractor._point_segment_distance(p, a, b))
-        return best
-
-    @staticmethod
-    def _point_segment_distance(p, a, b) -> float:
-        """Distance from point ``p`` to segment ``ab``."""
+        a = poly
+        b = np.roll(poly, -1, axis=0)
         ab = b - a
-        t = np.dot(p - a, ab) / np.dot(ab, ab)
-        t = float(np.clip(t, 0.0, 1.0))
-        closest = a + t * ab
-        return float(np.linalg.norm(p - closest))
+        ab2 = np.einsum("ij,ij->i", ab, ab)
+        t = np.einsum("ij,ij->i", p - a, ab) / np.where(ab2 > 0, ab2, 1.0)
+        t = np.clip(t, 0.0, 1.0)
+        closest = a + t[:, None] * ab
+        dists = np.linalg.norm(closest - p, axis=1)
+        return float(dists.min())
 
     @staticmethod
     def _point_in_polygon(point: np.ndarray, polygon: np.ndarray) -> bool:
-        """Ray-casting point-in-polygon test."""
-        n = len(polygon)
-        inside = False
+        """Ray-casting point-in-polygon test (vectorised)."""
+        poly = np.asarray(polygon, dtype=float)
         x, y = float(point[0]), float(point[1])
-        j = n - 1
-        for i in range(n):
-            xi, yi = polygon[i]
-            xj, yj = polygon[j]
-            if ((yi > y) != (yj > y)) and (
-                x < (xj - xi) * (y - yi) / (yj - yi) + xi
-            ):
-                inside = not inside
-            j = i
-        return inside
+        xi, yi = poly[:, 0], poly[:, 1]
+        xj, yj = np.roll(xi, 1), np.roll(yi, 1)
+        crosses = (yi > y) != (yj > y)
+        denom = np.where(yj - yi != 0, yj - yi, 1.0)
+        term = (xj - xi) * (y - yi) / denom + xi
+        intersects = crosses & (x < term)
+        return bool(np.count_nonzero(intersects) % 2 == 1)
 
     # ------------------------------------------------------------------ #
     # Dimension checks

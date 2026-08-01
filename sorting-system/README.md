@@ -48,6 +48,26 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 
+> Note: STEP (`.stp`/`.step`) support needs the `cascadio` backend (already in
+> `requirements.txt`). STEP geometry is expressed in metres by the CAD
+> standard; the system automatically rescales it to millimetres.
+
+## Sample 3D models
+
+Ready-made models for testing live in two directories next to the project:
+
+| Directory | Format | Contents |
+|-----------|--------|----------|
+| `zip1/Stl/`  | STL | Boxes, cylinders, a bottle, a helmet, a handle and more |
+| `zip2/Step/` | STEP | The same items exported to the STEP format |
+
+Use them like this:
+
+```bash
+python main.py --mode classify --input ../zip1/Stl/Helmet.stl
+python main.py --mode classify --input ../zip2/Step/Box_400x400x300.stp
+```
+
 ## Usage
 
 All modes are run from the `sorting-system/` directory:
@@ -185,6 +205,7 @@ Working area: 6000 x 10000 mm
 
 - **Python 3.10+** — primary language
 - **trimesh** — 3D model processing (STL/STEP)
+- **cascadio** — STEP (ISO 10303) geometry backend for trimesh
 - **PyBullet** — physics simulation
 - **NumPy/SciPy** — numerical computing
 - **PyYAML** — configuration

@@ -100,3 +100,49 @@ class TestFeatureExtractor:
         start = time.perf_counter()
         extractor.extract_features(str(path))
         assert time.perf_counter() - start < 0.05
+
+    def test_large_section_no_recursion(self, extractor):
+        # A section outline with ~2000 vertices previously blew the recursion
+        # limit of the recursive Welzl implementation.
+        angles = np.linspace(0, 2 * np.pi, 2000, endpoint=False)
+        pts = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+        radius = extractor._minimum_enclosing_circle(pts)
+        assert radius == pytest.approx(1.0, abs=1e-6)
+
+    def test_extract_high_res_cylinder_no_recursion(self, extractor, tmp_path):
+        # A 1500-segment cylinder produces a 1500-gon cross-section, which
+        # must not crash the extractor.
+        mesh = trimesh.creation.cylinder(radius=25, height=100, sections=1500)
+        path = tmp_path / "hi_res_cylinder.stl"
+        mesh.export(str(path))
+
+        features = extractor.extract_features(str(path))
+        assert features.roundness_coefficient >= 0.8
+        assert features.has_circle_in_section is True
+
+    def test_step_mesh_scaled_to_mm(self, tmp_path, monkeypatch):
+        # STEP backends (cascadio) return geometry in metres; the extractor
+        # must rescale it to the system's millimetre units.
+        def fake_load(*args, **kwargs):
+            return trimesh.creation.box(extents=[1.0, 0.8, 0.6])
+
+        monkeypatch.setattr("trimesh.load", fake_load)
+        path = tmp_path / "model.stp"
+        path.write_bytes(b"dummy step content")
+
+        loaded = FeatureExtractor().load_mesh(str(path))
+        assert np.allclose(
+            loaded.bounding_box.extents, [1000, 800, 600], atol=1e-6
+        )
+
+    def test_stl_mesh_not_scaled(self, tmp_path, monkeypatch):
+        # STL models are typically authored in mm and must be left untouched.
+        def fake_load(*args, **kwargs):
+            return trimesh.creation.box(extents=[100, 80, 60])
+
+        monkeypatch.setattr("trimesh.load", fake_load)
+        path = tmp_path / "model.stl"
+        path.write_bytes(b"dummy stl content")
+
+        loaded = FeatureExtractor().load_mesh(str(path))
+        assert np.allclose(loaded.bounding_box.extents, [100, 80, 60])

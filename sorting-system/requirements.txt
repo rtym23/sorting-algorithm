@@ -1,4 +1,5 @@
 trimesh>=3.20.0
+cascadio>=0.1.2
 numpy>=1.24.0
 scipy>=1.10.0
 pybullet>=3.2.0

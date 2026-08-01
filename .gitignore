@@ -19,9 +19,13 @@ env/
 .DS_Store
 Thumbs.db
 
+# Testing / coverage
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
 # Sorting system runtime artifacts
 sorting-system/*.log
 sorting-system/*.json
-sorting-system/.coverage
-sorting-system/.pytest_cache/
-sorting-system/.ruff_cache/

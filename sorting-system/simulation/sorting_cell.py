@@ -211,17 +211,10 @@ class SortingCell:
 
         for item in items:
             self.add_item(item)
-            logger.debug("Queued item: %s", item.name)
 
         all_events: list[SortingEvent] = []
-        progress_interval = max(1, len(items) // 10)
         while self._time < max_time and len(self.events) < len(items):
             all_events.extend(self.update(dt))
-            processed = len(self.events)
-            if processed % progress_interval == 0 and processed:
-                logger.info(
-                    "Progress: %d/%d items processed", processed, len(items)
-                )
 
         self.timeout_items = max(0, len(items) - len(self.events))
         if self.timeout_items:
