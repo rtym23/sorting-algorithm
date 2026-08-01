@@ -1,156 +1,155 @@
-# Отчёт по проекту «Интеллектуальная роботизированная система сортировки»
+# Project Report: Intelligent Robotic Sorting System
 
-## 1. Обзор проекта
+## 1. What the project is about
 
-Проект представляет собой программную модель автоматизированной линии
-сортировки: система «узнаёт» предметы по их 3D-моделям (STL/STEP), определяет
-их размер и форму и распределяет по зонам сортировочной ячейки, а кинематическая
-модель робота выполняет операции pick-and-place.
+This is a software model of an automated sorting line. The system "recognizes"
+items from their 3D models (STL/STEP), works out their size and shape, and sends
+them to the right zone of the sorting cell, while a kinematic robot model does
+the pick-and-place.
 
-Состоит из четырёх модулей:
+It's built from four parts:
 
-| Модуль | Назначение |
-|--------|-----------|
-| `classifier/` | Извлечение геометрических признаков из 3D-моделей и правила классификации |
-| `simulation/` | Симуляция сортировочной ячейки: конвейер, зоны A–D, маршрутизация |
-| `arm/` | Кинематическая модель робота и физическая симуляция на PyBullet |
-| `config.py` / `config.yaml` | Централизованная конфигурация (единицы: мм, мм/с, кг, с) |
+| Module | What it does |
+|--------|--------------|
+| `classifier/` | Pulls geometric features out of 3D models and applies the classification rules |
+| `simulation/` | Simulates the sorting cell: conveyor, zones A–D, routing |
+| `arm/` | Kinematic robot model and the PyBullet physics simulation |
+| `config.py` / `config.yaml` | Central configuration (units: mm, mm/s, kg, s) |
 
-Классификация работает по правилам, применяемым в фиксированном порядке:
-**сначала габариты, потом форма**.
+Classification follows fixed rules, applied in a strict order: **dimensions
+first, then shape**.
 
-| Категория | Условие | Зона |
-|-----------|---------|------|
-| Подходит для сортировки | Габариты 10×10×10 … 450×320×320 мм, круглого сечения нет | B |
-| Сверх нормы / ниже нормы | Меньше 10×10×10 мм **или** больше 450×320×320 мм | C |
-| Требует переупаковки | Габариты в норме, но есть круглое сечение (округлость ≥ 0.8) | D |
+| Category | Condition | Zone |
+|----------|-----------|------|
+| Suitable for sorting | Dimensions 10×10×10 … 450×320×320 mm, no round cross-section | B |
+| Oversized / undersized | Smaller than 10×10×10 mm **or** larger than 450×320×320 mm | C |
+| Needs repackaging | Dimensions are fine, but has a round cross-section (roundness ≥ 0.8) | D |
 
-Коэффициент округлости = r_вписанной / r_описанной окружности сечения.
-Сечения берутся через центроид объекта по трём осям и в ходе вращательного
-«прочёсывания» плоскостей вокруг каждой оси — так круглое сечение находится
-независимо от ориентации объекта.
+The roundness coefficient is r_inscribed / r_circumscribed of a section. The
+system takes sections through the object's centroid along the three axes, and
+then does a rotational "sweep" of the section planes around each axis — so a
+round section is found no matter how the object is oriented.
 
-## 2. Процедура тестирования
+## 2. How it was tested
 
-Тестирование проводилось в окружении Python 3.12 (Windows) со всеми
-зависимостями из `requirements-dev.txt`.
+Testing ran on Python 3.12 (Windows) with all dependencies from
+`requirements-dev.txt`.
 
-### 2.1. Автоматические тесты и линтер
+### 2.1. Automated tests and the linter
 
-- `python -m pytest tests/` — **64 теста, все проходят**.
-- `python -m ruff check .` — замечаний нет.
+- `python -m pytest tests/` — **64 tests, all pass**.
+- `python -m ruff check .` — clean, no warnings.
 
-### 2.2. Проверка всех режимов CLI
+### 2.2. Every CLI mode checked
 
-| Режим | Команда | Результат |
-|-------|---------|-----------|
-| classify (встроенные предметы) | `python main.py --mode classify` | OK, 15 предметов распределены по 3 категориям |
-| classify (файл STL) | `--input ../zip1/Stl/Box_400x400x300.stl` | OK |
-| classify (файл STEP) | `--input ../zip2/Step/Box_400x400x300.stp` | OK после исправлений |
-| simulate | `python main.py --mode simulate --items 20` | OK, 20/20 обработано |
-| robot | `python main.py --mode robot` | OK, 2/3 сценария успешны (3-й — намеренно) |
-| full | `python main.py --mode full --items 10 --output results.json` | OK, 10/10, JSON сохранён |
+| Mode | Command | Result |
+|------|---------|--------|
+| classify (built-in items) | `python main.py --mode classify` | OK, 15 items sorted into 3 categories |
+| classify (STL file) | `--input ../zip1/Stl/Box_400x400x300.stl` | OK |
+| classify (STEP file) | `--input ../zip2/Step/Box_400x400x300.stp` | OK after fixes |
+| simulate | `python main.py --mode simulate --items 20` | OK, 20/20 processed |
+| robot | `python main.py --mode robot` | OK, 2/3 scenarios succeed (3rd fails on purpose) |
+| full | `python main.py --mode full --items 10 --output results.json` | OK, 10/10, JSON saved |
 | pybullet (headless) | `python main.py --mode pybullet --items 10` | OK, 10/10 |
 
-### 2.3. Проверка на реальных 3D-моделях (zip1/zip2)
+### 2.3. Real 3D models (zip1/zip2)
 
-Все 11 STL-моделей и 11 STEP-моделей обработаны классификатором без сбоев.
+All 11 STL and 11 STEP models were classified without a single crash.
 
-## 3. Найденные и исправленные ошибки
+## 3. Bugs found and fixed
 
-### 3.1. Критические
+### 3.1. The critical ones
 
-1. **RecursionError (переполнение стека) в алгоритме Вельцля.**
-   Минимальная описанная окружность вычислялась рекурсивной реализацией
-   алгоритма Вельцля с глубиной рекурсии, равной числу точек сечения. На
-   моделях с тысячами вершин (Helmet.stl, Handle.stl, Cleaning_Solution.STL,
-   Helmet.stp) система падала с `RecursionError: maximum recursion depth
-   exceeded`.
-   **Исправление:** рекурсивная реализация заменена на эквивалентный
-   итеративный инкрементальный алгоритм с константной глубиной стека.
-   Добавлены регрессионные тесты.
+1. **Stack overflow in the Welzl algorithm.**
+   The minimum enclosing circle was computed with a recursive implementation of
+   the Welzl algorithm, and recursion depth grew with the number of points in a
+   section. On models with thousands of vertices (Helmet.stl, Handle.stl,
+   Cleaning_Solution.STL, Helmet.stp) the system died with
+   `RecursionError: maximum recursion depth exceeded`.
+   **Fix:** swapped the recursion for an equivalent iterative incremental
+   algorithm with a constant stack depth. Regression tests added.
 
-2. **Некорректные единицы измерения для STEP-файлов.**
-   Бэкенд cascadio/trimesh возвращает геометрию STEP в метрах, а вся система
-   работает в миллиметрах. Из-за этого, например,
-   `Box_400x400x300.stp` (400×300×400 мм) классифицировался как 0.4×0.3×0.4 мм
-   и уходил в категорию «ниже нормы».
-   **Исправление:** STEP/STP-модели автоматически пересчитываются из метров в
-   миллиметры (×1000) при загрузке; добавлены тесты на масштабирование.
+2. **Wrong units for STEP files.**
+   The cascadio/trimesh backend returns STEP geometry in metres, but the whole
+   system works in millimetres. So `Box_400x400x300.stp` (400×300×400 mm) was
+   classified as 0.4×0.3×0.4 mm and silently dumped into the "undersized"
+   category.
+   **Fix:** STEP/STP models are now automatically rescaled from metres to
+   millimetres (×1000) on load; scaling tests added.
 
-### 3.2. Зависимости и окружение
+### 3.2. Dependencies and environment
 
-3. **Отсутствовал бэкенд STEP (cascadio).** Заявленная в README поддержка STEP
-   не работала: `trimesh.load` падал с `ModuleNotFoundError`.
-   **Исправление:** `cascadio>=0.1.2` добавлен в `requirements.txt` и
-   `pyproject.toml`; при отсутствии бэкенда выдаётся понятная ошибка.
+3. **The STEP backend (cascadio) was missing.** The STEP support promised in the
+   README didn't actually work — `trimesh.load` crashed with
+   `ModuleNotFoundError`.
+   **Fix:** `cascadio>=0.1.2` added to `requirements.txt` and `pyproject.toml`;
+   if the backend is missing, the user gets a clear error instead of a crash.
 
-4. **Тяжёлый импорт PyBullet при каждом запуске.** PyBullet импортировался
-   сразу при импорте пакета `arm` (выводил баннер сборки в stderr и замедлял
-   запуск всех режимов).
-   **Исправление:** импорт сделан ленивым (PEP 562, `__getattr__`), PyBullet
-   загружается только в режиме `--mode pybullet`.
+4. **Heavy PyBullet import on every launch.** PyBullet was imported the moment
+   the `arm` package was imported — it printed a build banner to stderr and
+   slowed down every mode.
+   **Fix:** made the import lazy (PEP 562, `__getattr__`); PyBullet only loads
+   in `--mode pybullet`.
 
-### 3.3. Производительность
+### 3.3. Performance
 
-5. **Медленные поэлементные циклы Python.** Расчёт «расстояния до ближайшего
-   ребра» и тест «точка в многоугольнике» выполнялись в циклах по рёбрам.
-   На сечениях с ~2700 рёбрами это давало десятки секунд на модель.
-   **Исправление:** обе функции векторизованы через NumPy. Ускорение:
+5. **Slow per-element Python loops.** "Distance to nearest edge" and the
+   "point in polygon" test ran as loops over edges. On sections with ~2700 edges
+   that meant dozens of seconds per model.
+   **Fix:** both functions vectorized with NumPy. Speed-up:
 
-   | Модель | Было | Стало |
-   |--------|------|-------|
-   | Helmet.stl | 6.9 c | 0.7 c |
-   | Cleaning_Solution.STL | 9.5 c | 1.1 c |
-   | Handle.stl | 8.4 c | 0.7 c |
-   | Lunchbox.stl | 4.7 c | 0.4 c |
-   | Helmet.stp | 30.5 c | 10.3 c* |
+   | Model | Before | After |
+   |-------|--------|-------|
+   | Helmet.stl | 6.9 s | 0.7 s |
+   | Cleaning_Solution.STL | 9.5 s | 1.1 s |
+   | Handle.stl | 8.4 s | 0.7 s |
+   | Lunchbox.stl | 4.7 s | 0.4 s |
+   | Helmet.stp | 30.5 s | 10.3 s* |
 
-   *`Helmet.stp` включает ~6 c на само декодирование STEP в cascadio.
+   *`Helmet.stp` includes ~6 s for the STEP decoding in cascadio itself.
 
-### 3.4. Качество вывода и упаковка
+### 3.4. Output quality and packaging
 
-6. **Мозаика в консоли Windows:** символ «—» (em dash) в выводе робота
-   отображался как «�». Заменён на обычный дефис.
-7. **Упаковка проекта:** в `pyproject.toml` не были перечислены корневые
-   модули `config` и `main`, из-за чего `pip install .` не создавал рабочий
-   пакет и консольную команду. Добавлены `py-modules`.
-8. **`.gitignore`:** не игнорировались артефакты `.coverage` и корневой
-   `.pytest_cache`; добавлены.
-9. **Нет лицензии:** добавлен файл `LICENSE` (MIT).
+6. **Mojibake in the Windows console:** the em-dash "—" in the robot output
+   rendered as "�". Replaced with a regular hyphen.
+7. **Packaging:** `pyproject.toml` didn't list the root modules `config` and
+   `main`, so `pip install .` produced a broken package and no console command.
+   `py-modules` added.
+8. **`.gitignore`:** `.coverage` and the root `.pytest_cache` weren't ignored;
+   added.
+9. **No license:** added `LICENSE` (MIT).
 
-## 4. Результаты работы системы (после исправлений)
+## 4. System results (after the fixes)
 
-- Симуляция 20 случайных предметов: **20/20 обработано, 0 сбоев**,
-  пропускная способность ~3.4 шт/с (время симуляции 5.95 c).
-- Полный цикл 10 предметов: **10/10 успешно**, средний цикл 6.54 c.
-- PyBullet (без GUI), 10 предметов: **10/10 успешно**, зоны B/C/D: 6/1/3.
-- Робот: 2 из 3 демо-сценариев успешны; сценарий для зоны C намеренно
-  отклонён (предмет 40 кг превышает допустимую нагрузку 20 кг — система
-  «не оптимистична» и честно сообщает об ошибке).
+- Simulation of 20 random items: **20/20 processed, 0 failures**, throughput
+  ~3.4 items/s (simulation time 5.95 s).
+- Full cycle of 10 items: **10/10 successful**, average cycle 6.54 s.
+- PyBullet (headless), 10 items: **10/10 successful**, zones B/C/D: 6/1/3.
+- Robot: 2 of 3 demo scenarios succeed; the zone C scenario is deliberately
+  rejected (a 40 kg item exceeds the 20 kg payload — the system is not
+  "optimistic" and honestly reports the error).
 
-## 5. Примечания и ограничения (осознанные решения)
+## 5. Notes and limitations (deliberate trade-offs)
 
-- **Полые цилиндры** (например, `Cylinder.stl` — труба) могут не набирать
-  округлость ≥ 0.8, потому что вписанная окружность ограничена внутренним
-  отверстием. Это следствие определения коэффициента, а не баг.
-- **Предположение о единицах STEP:** считается, что после конвертации
-  cascadio геометрия выражена в метрах; она приводится к миллиметрам.
-- Робот в PyBullet — упрощённая визуальная модель; проверки достижимости и
-  нагрузки выполняет аналитическая модель (`arm/manipulator.py`).
+- **Hollow cylinders** (like `Cylinder.stl`, a pipe) may not reach roundness
+  ≥ 0.8, because the inscribed circle is constrained by the inner hole. That's
+  a consequence of how the coefficient is defined, not a bug.
+- **STEP unit assumption:** we assume cascadio returns geometry in metres after
+  conversion, and bring it to millimetres.
+- The robot in PyBullet is a simplified visual model; the reach and payload
+  checks are done by the analytic model (`arm/manipulator.py`).
 
-## 6. Рекомендации
+## 6. Recommendations
 
-1. Добавить CI (GitHub Actions): запуск `pytest` и `ruff` при каждом push.
-2. Подключить отчёт о покрытии (`pytest-cov`, уже присутствует в окружении).
-3. Вынести «общие» фикстуры и конфиг-фикстуры в `conftest.py`.
-4. Для больших моделей добавить кэш признаков на диск (сейчас кэш — только
-   в памяти процесса).
+1. Add CI (GitHub Actions): run `pytest` and `ruff` on every push.
+2. Wire up a coverage report (`pytest-cov`, already present in the environment).
+3. Move the shared and config fixtures into `conftest.py`.
+4. For large models, add a disk-based feature cache (right now the cache only
+   lives in the process memory).
 
-## 7. Итог
+## 7. Bottom line
 
-Проект доведён до рабочего состояния: устранены 2 критических бага
-(падение на больших моделях, неверные единицы STEP), исправлены зависимости,
-упаковка и гигиена репозитория, добавлены 4 регрессионных теста. Итоговая
-статистика: **64 теста проходят, ruff без замечаний, все 5 режимов CLI
-работают, классификатор обрабатывает все 22 прилагаемые модели.**
+The project is now in working shape: two critical bugs fixed (crash on large
+models, wrong STEP units), dependencies, packaging and repo hygiene cleaned up,
+four regression tests added. Final numbers: **64 tests pass, ruff is clean, all
+5 CLI modes work, and the classifier handles all 22 bundled models.**

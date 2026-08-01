@@ -69,7 +69,7 @@ sorting-system/
 
 - [Detailed README](sorting-system/README.md) — usage, configuration,
   reliability and performance notes.
-- [Report](REPORT.md) — project report (in Russian).
+- [Report](REPORT.md) — project report.
 
 ## Tech stack
 
