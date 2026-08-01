@@ -1,7 +1,6 @@
-import numpy as np
 from dataclasses import dataclass, field
-from typing import Optional
-import math
+
+import numpy as np
 
 
 @dataclass
@@ -14,7 +13,7 @@ class Item:
     velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
     is_round: bool = False
     roundness: float = 0.0
-    category: Optional[str] = None
+    category: str | None = None
     on_conveyor: bool = True
 
     @property
@@ -34,45 +33,46 @@ class Item:
 class ItemGenerator:
     """Generates random items for testing."""
 
-    # Standard test items
+    # Standard test items with translated names
     TEST_ITEMS = [
-        ("Коробка_малая", np.array([100, 80, 60]), False, 0.3),
-        ("Коробка_средняя", np.array([250, 200, 150]), False, 0.4),
-        ("Коробка_большая", np.array([400, 300, 250]), False, 0.5),
-        ("Цилиндр_малый", np.array([50, 50, 100]), True, 0.95),
-        ("Цилиндр_большой", np.array([200, 200, 300]), True, 0.95),
-        ("Шар", np.array([150, 150, 150]), True, 1.0),
-        ("Куб", np.array([200, 200, 200]), False, 0.7),
-        ("Параллелепипед", np.array([300, 150, 100]), False, 0.5),
-        ("Тетраэдр", np.array([180, 180, 180]), False, 0.6),
-        ("Миниатюра", np.array([5, 5, 5]), False, 0.3),
-        ("Гигант", np.array([600, 400, 400]), False, 0.4),
-        ("Труба", np.array([100, 100, 400]), True, 0.9),
-        ("Конус", np.array([150, 150, 200]), True, 0.85),
-        ("Коробка_узкая", np.array([350, 50, 50]), False, 0.3),
-        ("Плоская_пластина", np.array([300, 200, 5]), False, 0.2),
+        ("Small_Box", np.array([100, 80, 60]), False, 0.3),
+        ("Medium_Box", np.array([250, 200, 150]), False, 0.4),
+        ("Large_Box", np.array([400, 300, 250]), False, 0.5),
+        ("Small_Cylinder", np.array([50, 50, 100]), True, 0.95),
+        ("Large_Cylinder", np.array([200, 200, 300]), True, 0.95),
+        ("Sphere", np.array([150, 150, 150]), True, 1.0),
+        ("Cube", np.array([200, 200, 200]), False, 0.7),
+        ("Parallelepiped", np.array([300, 150, 100]), False, 0.5),
+        ("Tetrahedron", np.array([180, 180, 180]), False, 0.6),
+        ("Miniature", np.array([5, 5, 5]), False, 0.3),
+        ("Giant", np.array([600, 400, 400]), False, 0.4),
+        ("Tube", np.array([100, 100, 400]), True, 0.9),
+        ("Cone", np.array([150, 150, 200]), True, 0.85),
+        ("Narrow_Box", np.array([350, 50, 50]), False, 0.3),
+        ("Flat_Plate", np.array([300, 200, 5]), False, 0.2),
     ]
 
     def __init__(self, start_id: int = 0):
         self._next_id = start_id
 
-    def generate_random(self, seed: Optional[int] = None) -> Item:
+    def generate_random(self, seed: int | None = None) -> Item:
         """Generate a random item with dimensions within reasonable range."""
-        if seed is not None:
-            np.random.seed(seed)
+        # A local RNG keeps the generator's randomness isolated and leaves the
+        # global NumPy random state untouched.
+        rng = np.random.default_rng(seed)
 
         # Random dimensions between 5mm and 500mm
-        dims = np.random.uniform(5, 500, 3)
+        dims = rng.uniform(5, 500, 3)
 
         # Randomly decide if it's round (cylinder/sphere)
-        is_round = np.random.random() < 0.3
+        is_round = rng.random() < 0.3
         if is_round:
             # Make two dimensions similar for roundness
-            dims[1] = dims[0] * np.random.uniform(0.9, 1.1)
+            dims[1] = dims[0] * rng.uniform(0.9, 1.1)
 
-        roundness = np.random.uniform(0.1, 1.0)
+        roundness = rng.uniform(0.1, 1.0)
         if is_round:
-            roundness = np.random.uniform(0.8, 1.0)
+            roundness = rng.uniform(0.8, 1.0)
 
         name = f"item_{self._next_id}"
         self._next_id += 1
@@ -128,13 +128,19 @@ class ConveyorBelt:
         self.start_x = 0.0
         self.end_x = length
 
-    def add_item(self, item: Item, position: Optional[np.ndarray] = None):
+    def add_item(self, item: Item, position: np.ndarray | None = None):
         """Add an item to the conveyor."""
         if position is None:
-            position = np.array([self.start_x + 50, self.width / 2, self.height + item.dimensions[2] / 2])
+            position = np.array(
+                [
+                    self.start_x + 50,
+                    self.width / 2,
+                    self.height + item.dimensions[2] / 2,
+                ]
+            )
 
-        item.position = position.copy()
-        item.velocity = np.array([self.speed, 0, 0])
+        item.position = np.asarray(position, dtype=float).copy()
+        item.velocity = np.array([self.speed, 0, 0], dtype=float)
         item.on_conveyor = True
         self.items.append(item)
 
@@ -158,7 +164,7 @@ class ConveyorBelt:
 
         return arrived
 
-    def get_item_at_position(self, x: float, tolerance: float = 100.0) -> Optional[Item]:
+    def get_item_at_position(self, x: float, tolerance: float = 100.0) -> Item | None:
         """Find item closest to given x position."""
         best_item = None
         best_dist = float("inf")

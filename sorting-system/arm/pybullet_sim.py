@@ -1,22 +1,46 @@
+"""PyBullet-based physical simulation of the sorting cell.
+
+This is the physics layer of the sorting system: it creates a ground plane, a
+simplified conveyor, the four sorting zones and a robot, then processes items.
+Unlike the analytic :mod:`arm.manipulator` model, the items are real rigid
+bodies here — they are physically moved to their target zone, and the routing
+is gated by the same robot feasibility checks (reach, payload, grip) so the
+outcome is consistent with the rest of the pipeline.
+
+Run headless (no window)::
+
+    python arm/pybullet_sim.py
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
 import pybullet as p
 import pybullet_data
-import time
-from typing import Optional
-from dataclasses import dataclass
 
-import sys
-import os
+# Make sibling packages importable when running this file directly.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from classifier.sorter import ItemClassifier, Category
-from simulation.items import Item, ConveyorBelt, ItemGenerator
-from robot.manipulator import RobotManipulator, RobotConfig
+from arm.manipulator import RobotManipulator
+from classifier.sorter import Category, ItemClassifier
+from config import get_config
+from simulation.items import Item, ItemGenerator
+
+logger = logging.getLogger(__name__)
+
+MM_TO_M = 1e-3
 
 
 @dataclass
 class SimulationConfig:
-    """PyBullet simulation configuration."""
+    """PyBullet simulation options."""
+
     gui: bool = True
     time_step: float = 1.0 / 240.0
     conveyor_speed: float = 1.0  # m/s
@@ -25,39 +49,39 @@ class SimulationConfig:
 
 
 class PyBulletSimulation:
-    """
-    PyBullet-based simulation of the sorting cell.
+    """Physical (PyBullet) simulation of the sorting cell.
 
-    Creates a physical simulation with:
-    - Ground plane
-    - Conveyor belt
-    - Robot manipulator (SCARA-style)
-    - Sorting zones (A, B, C, D)
+    Creates a scene with a ground plane, conveyor belt, robot manipulator and
+    the four sorting zones (A, B, C, D), then classifies and "processes" items.
     """
 
-    def __init__(self, config: Optional[SimulationConfig] = None):
-        if config is None:
-            config = SimulationConfig()
+    # Height of each zone pad above the ground (m); the item drop position is
+    # computed on top of the pad so items visibly rest in their zone.
+    ZONE_PAD_HEIGHT = {"A": 0.7, "B": 0.7, "C": 0.4, "D": 0.4}
 
-        self.config = config
+    def __init__(self, config: SimulationConfig | None = None):
+        self.config = config or SimulationConfig()
         self.classifier = ItemClassifier()
         self.generator = ItemGenerator()
+        # Analytic robot model — provides the feasibility checks (reach,
+        # payload, grip) that gate physical routing.
+        self.robot = RobotManipulator()
 
-        # Physics client
-        self.physics_client = None
-        self.items_in_scene = {}
-        self.zone_visuals = {}
+        self.physics_client: int | None = None
+        self.items_in_scene: dict[int, int] = {}
+        self.zone_visuals: dict[str, int] = {}
+        self.zone_pad_positions: dict[str, list] = {}
 
-        # Zone positions (meters, converted from mm)
+        # Zone positions in meters, read from the shared config (mm).
+        zones = get_config().simulation.zones
         self.zone_positions = {
-            "A": np.array([0.0, 5.0, 0.7]),  # Input conveyor
-            "B": np.array([2.0, 5.0, 0.7]),  # Main sorter
-            "C": np.array([4.0, 2.0, 0.4]),  # Oversized
-            "D": np.array([4.0, 8.0, 0.4]),  # Repackaging
+            key: zone.position.astype(float) * MM_TO_M
+            for key, zone in zones.items()
         }
 
         # Statistics
         self.sorted_items = {"A": 0, "B": 0, "C": 0, "D": 0}
+        self.failed_items = 0
 
     def initialize(self):
         """Initialize PyBullet simulation."""
@@ -152,6 +176,9 @@ class PyBulletSimulation:
         for zone_name, pos in self.zone_positions.items():
             color = zone_colors[zone_name]
             size = zone_sizes[zone_name]
+            # The pad is a thin box; the drop height is its top surface.
+            z = pos[2] + self.ZONE_PAD_HEIGHT.get(zone_name, 0.0)
+            pad_pos = [pos[0], pos[1], z - size[2] / 2]
 
             shape = p.createCollisionShape(
                 p.GEOM_BOX,
@@ -166,13 +193,14 @@ class PyBulletSimulation:
                 baseMass=0,
                 baseCollisionShapeIndex=shape,
                 baseVisualShapeIndex=visual,
-                basePosition=[pos[0], pos[1], pos[2] - 0.3],
+                basePosition=pad_pos,
             )
+            self.zone_pad_positions[zone_name] = pad_pos
 
             # Add text label
             p.addUserDebugText(
                 f"Zone {zone_name}",
-                [pos[0], pos[1], pos[2]],
+                [pos[0], pos[1], z],
                 textColorRGB=[1, 1, 1],
                 textSize=1.5,
             )
@@ -234,7 +262,7 @@ class PyBulletSimulation:
             basePosition=[robot_pos[0] + 1.2, robot_pos[1], robot_pos[2] + 0.1],
         )
 
-    def add_item_to_scene(self, item: Item, position: Optional[np.ndarray] = None) -> int:
+    def add_item_to_scene(self, item: Item, position: np.ndarray | None = None) -> int:
         """Add an item to the simulation scene."""
         if position is None:
             position = np.array([0.0, 5.0, 0.75])
@@ -296,25 +324,56 @@ class PyBulletSimulation:
             "confidence": result.confidence,
         }
 
+    def _drop_position(self, zone_name: str, item: Item) -> list:
+        """Position (m) where an item rests on the given zone pad."""
+        pad_pos = self.zone_pad_positions[zone_name]
+        dims_m = item.dimensions / 1000.0
+        return [pad_pos[0], pad_pos[1], pad_pos[2] + dims_m[2] / 2]
+
     def simulate_item_processing(self, item: Item) -> dict:
-        """Simulate processing of a single item."""
+        """Classify an item, gate routing with robot feasibility checks and
+        physically move the item to its target zone when possible."""
         # Add item to scene at conveyor start
         item_pos = np.array([0.0, 5.0, 0.75])
-        self.add_item_to_scene(item, item_pos)
+        body_id = self.add_item_to_scene(item, item_pos)
 
         # Classify
         classification = self.classify_and_route(item)
+        target_zone = classification["target_zone"]
 
         # Simulate conveyor movement (simplified)
-        conveyor_time = 6.0  # seconds to traverse conveyor
         p.stepSimulation()
 
-        # Route to zone
-        target_zone = classification["target_zone"]
-        target_pos = self.zone_positions[target_zone]
+        # Gate routing with the analytic robot model (reach, payload, grip).
+        robot_result = self.robot.pick_and_place(
+            item_position=item_pos * 1000.0,
+            item_dimensions=item.dimensions,
+            target_position=(
+                np.asarray(self.zone_positions[target_zone], dtype=float) * 1000.0
+            ),
+        )
+        success = robot_result["success"]
 
-        # Update statistics
-        self.sorted_items[target_zone] += 1
+        classification.update({
+            "success": success,
+            "reason": robot_result.get("reason", ""),
+            "cycle_time": robot_result.get("cycle_time", 0.0),
+        })
+
+        if success:
+            # Physically move the item onto the target zone pad.
+            p.resetBasePositionAndOrientation(
+                body_id,
+                self._drop_position(target_zone, item),
+                [0, 0, 0, 1],
+            )
+            self.sorted_items[target_zone] += 1
+            logger.info("Item %s -> Zone %s (%s)", item.name, target_zone,
+                        classification["category"])
+        else:
+            self.failed_items += 1
+            logger.warning("Item %s NOT routed to zone %s: %s", item.name,
+                           target_zone, classification["reason"])
 
         return classification
 
@@ -328,14 +387,21 @@ class PyBulletSimulation:
             result = self.simulate_item_processing(item)
             results.append(result)
 
-            # Step simulation
-            for _ in range(100):
-                p.stepSimulation()
-                time.sleep(1.0 / 240.0)
+            # Step simulation. Only throttle to real-time when the GUI is visible.
+            steps = 100
+            if self.config.gui:
+                for _ in range(steps):
+                    p.stepSimulation()
+                    time.sleep(self.config.time_step)
+            else:
+                for _ in range(steps):
+                    p.stepSimulation()
 
         # Generate report
         report = {
             "total_items": num_items,
+            "successful": num_items - self.failed_items,
+            "failed": self.failed_items,
             "sorted_items": self.sorted_items.copy(),
             "results": results,
         }
@@ -357,12 +423,18 @@ def run_headless_simulation(num_items: int = 20):
         report = sim.run_simulation(num_items)
         print("=== PyBullet Simulation Results ===")
         print(f"Total items: {report['total_items']}")
+        print(f"Successful: {report['successful']}")
+        print(f"Failed: {report['failed']}")
         print(f"Sorted to zones: {report['sorted_items']}")
 
         for r in report["results"]:
-            print(f"\nItem -> {r['category']}")
+            status = "OK" if r["success"] else "FAILED"
+            print(f"\n[{status}] Item -> {r['category']}")
             print(f"  Target: Zone {r['target_zone']}")
-            print(f"  Reason: {r['reason']}")
+            if r["success"]:
+                print(f"  Cycle time: {r['cycle_time']:.2f} sec")
+            else:
+                print(f"  Reason: {r['reason']}")
 
     finally:
         sim.cleanup()

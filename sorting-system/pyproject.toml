@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sorting-system"
+version = "1.0.0"
+description = "Intelligent robotic sorting system: geometric classification, cell simulation and robot pick-and-place"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "trimesh>=3.20.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pybullet>=3.2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+sorting-system = "main:main"
+
+[tool.setuptools]
+packages = ["classifier", "simulation", "arm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]

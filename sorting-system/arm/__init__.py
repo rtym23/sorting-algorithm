@@ -1,4 +1,4 @@
-from .manipulator import RobotManipulator, Gripper
+from .manipulator import Gripper, RobotManipulator
 
 try:
     from .pybullet_sim import PyBulletSimulation
